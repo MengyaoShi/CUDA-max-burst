@@ -46,8 +46,8 @@ __global__ void reduce(float *g_idata, float *g_odata){
  //  sdata[tid]=g_idata[i];
    //__syncthreads();
    //printf("sdata[tid],tid=%f, %d\n", sdata[tid], tid);
-   for(unsigned int s=1; s<blockDim.x*blockDim.y; s*=2){
-      if(tid%(2*s)==0){
+   for(unsigned int  s=blockDim.x*blockDim.y/2; s>0;s>>=1){
+      if(tid<blockDim.x*blockDim.y){
          if(g_idata[i+s]>g_idata[i]){
             g_idata[i]=g_idata[i+s];
          }
@@ -116,7 +116,7 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
 int main(int arc, char **argv){
   float *x;
   int n=1000;
-  int k=3;
+  int k=900;
   int *startend;
   float *bigmax;
   bigmax=(float*) malloc(sizeof(float));
