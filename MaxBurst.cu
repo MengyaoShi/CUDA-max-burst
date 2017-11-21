@@ -28,12 +28,13 @@ __global__   void burst(float *dx, int n, int k, float *dxbar, int maxWinSize) {
       int i; float tot=0;
       for(i=perstart;i<=perend;i++) tot+=dx[i];
       dxbar[indx]=tot/(perend-perstart+1);
-      printf("perend, perstart, mean, blockId, threadIdx.x, threadIdx.y=%d, %d, %f, %d\n",perend, perstart, dxbar[indx], blockIdx.x, threadIdx.x, threadIdx.y);
    }
    else{
+      printf("mean, indx=%f, %d\n", dxbar[indx], indx);
       return;
    }
-
+   __syncthreads();
+   printf("mean,indx=%f, %d\n", dxbar[indx], indx);
 }
 
 __global__ void reduce(float *g_idata, float *g_odata){
@@ -70,7 +71,7 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
 
     float* xbar; //Means for every possiblle start position, and window size.
     float* dxbar;
-    int nblk=5;//Number of blocks
+    int nblk=1;//Number of blocks
     int maxWinSize=n;
     // copy host matrix to device matrix
 
@@ -100,8 +101,7 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
     cudaMemcpy(xbar, dxbar, sizeof(float)*(n-k+1)*(n-k+1), cudaMemcpyDeviceToHost);
     int tmp=0;
     for(tmp=0; tmp<(n-k+1)*(n-k+1); tmp++){
-    
-      printf("This is my question, why xbar=%f\n", xbar[tmp]);
+       printf("after copy from GPU to CPU, mean, indx  are %f, %d\n", xbar[tmp], tmp);
     }
     cudaMemcpy(dxbar,xbar,sizeof(float)*(n-k+1)*(n-k+1) ,cudaMemcpyHostToDevice);
     //SomeReduce function
