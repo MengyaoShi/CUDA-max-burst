@@ -9,6 +9,7 @@ __global__   void SmallWindowBurst(float *dx, int n, int k, float *dxbar){
    float sum=0.0;
    float dCandMean=0.0;
    float dPreCandMean=0.0;
+   int startm1=0;
    if(winsize>n){
       return;
    }
@@ -16,19 +17,9 @@ __global__   void SmallWindowBurst(float *dx, int n, int k, float *dxbar){
    if(n<2*k){
       return;
    }
-   extern __shared__ float sx[];//of dimension, n
-   //copy dx to sx
-   sx[me]=dx[me];
-   int startm1=0;
-   if(me==0){
-     for(int i=n-k+1; i<n; i++){
-       sx[i]=dx[i];
-     }
-   }
-   __syncthreads();
 
    for(int i=0;i<winsize;i++){
-      sum+=sx[i];
+      sum+=dx[i];
    }
    dxbar[me]=sum/winsize;
    //printf("av=%f, %d\n", dxbar[me], winsize);
@@ -43,17 +34,13 @@ __global__   void SmallWindowBurst(float *dx, int n, int k, float *dxbar){
    dxbar[me]=dCandMean;
    for(; startm1<(n-winsize); startm1++){
       dPreCandMean=dCandMean;
-      dCandMean=dPreCandMean+((sx[winsize+startm1]-sx[startm1])/winsize);
-      if(winsize==3){ 
-         printf("start, maxCand, n-winsize=%d, %f, %d\n", startm1+1, dCandMean, n-winsize );
-      }
+      dCandMean=dPreCandMean+((dx[winsize+startm1]-dx[startm1])/winsize);
       if(dCandMean>dxbar[me]){
          dxbar[me]=dCandMean;
       }
    }
-   //printf("%d\n",maxCand);
    
-   //printf("dxbar[winzie], winsize=%f, %d\n", dxbar[me], winsize);
+   printf("dxbar[winzie], winsize=%f, %d\n", dxbar[me], winsize);
 }
 
 
@@ -66,57 +53,56 @@ __global__   void burst(float *dx, int n, int k, float *dxbar, int maxWinSize) {
    int perstart=x;//start
    int perend;
    int indx=0;
-   extern __shared__ float sx[];
+   //extern __shared__ float sx[];
    int perlen=y+k;//length of window, or window size. Notice if minimum windowSize k is smaller than n/2 ,we only need maximum windowSize to be 2k.
    //each thread copy one number to shared memory, notice we have more threads than numbers/
    indx=perstart*(n-k+1)+perlen-k;
    dxbar[indx]=-1000.0;
+   /*
    if(me<n){
       sx[me]=dx[me];
    }
    __syncthreads();
+   */
    if(maxWinSize>n-perstart){
      maxWinSize=n-perstart;
-   } 
-   if (perstart<=n-k && perlen>=k && perlen<=maxWinSize && n<2*k){
+   }
+   if (perstart<=n-k && perlen>=k && perlen<=maxWinSize){
       perend=perstart+perlen-1;
       int i; float tot=0;
-      for(i=perstart;i<=perend;i++) tot+=sx[i];
+      for(i=perstart;i<=perend;i++) tot+=dx[i];
       dxbar[indx]=tot/(perend-perstart+1);
    }
    else{
+      //printf("mean, indx=%f, %d\n", dxbar[indx], indx);
       return;
    }
    __syncthreads();
    //printf("mean,indx=%f, %d\n", dxbar[indx], indx);
 }
-
 __global__ void reduce(float *g_idata, float *g_odata){
    extern __shared__ float sdata[];
    int tid=threadIdx.y*blockDim.x+threadIdx.x;
    unsigned int i=blockIdx.x*blockDim.x*blockDim.y+tid;
-   sdata[tid]=g_idata[i];
-   __syncthreads();
+ //  sdata[tid]=g_idata[i];
+   //__syncthreads();
    //printf("sdata[tid],tid=%f, %d\n", sdata[tid], tid);
-   for(unsigned int s=1; s<blockDim.x*blockDim.y; s*=2){
-      int index=2*s*tid;
-      if(index<blockDim.x*blockDim.y){
-         if(sdata[index]<sdata[index+s]){
-            sdata[index]=sdata[index+s];
+   for(unsigned int  s=blockDim.x*blockDim.y/2; s>0;s>>=1){
+      if(tid<blockDim.x*blockDim.y){
+         if(g_idata[i+s]>g_idata[i]){
+            g_idata[i]=g_idata[i+s];
          }
       }
       __syncthreads();
-
    }
 
-   if(tid==0) {g_odata[blockIdx.x]=sdata[0];
-   printf("in reduce, %f,\n", g_odata[blockIdx.x]);}
+   if(tid==0) {g_odata[blockIdx.x]=g_idata[i];
+   printf("in reduce, blockIdx.x, ans,%d %f,\n", blockIdx.x, g_odata[blockIdx.x]);
+   }
 }
-
 // things need to fix probably: bigmax allocate one int; passing n and k and bigmax to cuda function
 void maxburst(float *x, int n, int k, int *startend, float *bigmax){
     float *dx; //device x
-    float *dbigmax; //device bigmax
     int asize = n*sizeof(float);
     float *out;//each block has an output max mean answer.
     float *dout; //on device, out.
@@ -127,13 +113,10 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
     int maxWinSize=n;
     // copy host matrix to device matrix
 
-    xbar=(float *) malloc(sizeof(float)*(n-k+1)*(n-k+1));
     out=(float *) malloc(sizeof(float)*nblk);
     // allocate space for device matrix
     cudaMalloc ((void **)&dx,asize);
-    cudaMalloc (( void **)&dbigmax , sizeof(float) );
     cudaMalloc (( void **)&dout, nblk*sizeof(float));
-    cudaMemcpy(dbigmax, bigmax, sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(dout, out, sizeof(float)*(nblk), cudaMemcpyHostToDevice);
     cudaMemcpy(dx,x,sizeof(float)*n, cudaMemcpyHostToDevice);
 
@@ -149,44 +132,42 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
     dim3 dimGrid(nblk,1); // n blocks
     dim3 dimBlock(16, 16,1);
     if(n<2*k){
+       xbar=(float *) malloc(sizeof(float)*(n-k+1)*(n-k+1));
        cudaMalloc ((void **)&dxbar, sizeof(float)*(n-k+1)*(n-k+1));
        cudaMemcpy(dxbar,xbar,sizeof(float)*(n-k+1)*(n-k+1) ,cudaMemcpyHostToDevice);
-       burst<<<dimGrid,dimBlock, n*nblk>>>(dx,n,k,dxbar, maxWinSize);
+       burst<<<dimGrid,dimBlock>>>(dx,n,k,dxbar, maxWinSize);
     }
     else{
+       xbar=(float *) malloc(sizeof(float)*(n-k+1));
        cudaMalloc ((void **)&dxbar, sizeof(float)*(n-k+1));
        cudaMemcpy(dxbar,xbar,sizeof(float)*(n-k+1) ,cudaMemcpyHostToDevice);
-       
-       
-       SmallWindowBurst<<<dimGrid, dimBlock, nblk*n>>>(dx, n, k, dxbar);
+       SmallWindowBurst<<<dimGrid, dimBlock>>>(dx, n, k, dxbar);
     }
     //If the wind size is smaller than n/2, we are goint to use first approach. n-k+1, in second senario, we have (n-k+1) **2
     
     
     cudaThreadSynchronize();
-    cudaMemcpy(xbar, dxbar, sizeof(float)*(n-k+1)*(n-k+1), cudaMemcpyDeviceToHost);
-    int tmp=0;
-    for(tmp=0; tmp<(n-k+1)*(n-k+1); tmp++){
-       //printf("after copy from GPU to CPU, mean, indx  are %f, %d\n", xbar[tmp], tmp);
-    }
-    cudaMemcpy(dxbar,xbar,sizeof(float)*(n-k+1)*(n-k+1) ,cudaMemcpyHostToDevice);
     //SomeReduce function
-    reduce<<<dimGrid, dimBlock, (n-k+1)*(n-k+1)>>>(dxbar, dout);
-    // copy row vector from device to host
-    //cudaMemcpy(xbar, dxbar, sizeof(float)*(n-k+1)*(n-k+1), cudaMemcpyDeviceToHost);
-    //cudaMemcpy(bigmax,dbigmax, sizeof(float),cudaMemcpyDeviceToHost);
-    //cudaMemcpy(out, dout, sizeof(float)*nblk, cudaMemcpyDeviceToHost);
-    //printf("bigmax is%f\n", xbar[0]);
+    reduce<<<dimGrid, dimBlock>>>(dxbar, dout);
+    cudaThreadSynchronize();
+    cudaMemcpy(out, dout, sizeof(float)*nblk, cudaMemcpyDeviceToHost);
+
+    for (int i=0; i<nblk; i++){
+       printf("%f\n,",out[i]);
+       if (out[i]>bigmax[0]){
+          bigmax[0]=out[i];
+       }
+    }
+    printf("bigmax is%f\n", bigmax[0]);
     cudaFree(dxbar);
     cudaFree(dout);
-    cudaFree (dbigmax);
     cudaFree (dx);
 
 }
 int main(int arc, char **argv){
   float *x;
-  int n=80;
-  int k=3;
+  int n=10000;
+  int k=10000;
   int *startend;
   float *bigmax;
   bigmax=(float*) malloc(sizeof(float));
