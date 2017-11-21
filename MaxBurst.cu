@@ -26,7 +26,7 @@ __global__   void burst(float *dx, int n, int k, float *dxbar, int maxWinSize) {
    if (perstart<=n-k && perlen>=k && perlen<=maxWinSize){
       perend=perstart+perlen-1;
       int i; float tot=0;
-      for(i=perstart;i<=perend;i++) tot+=dx[i];
+      for(i=perstart;i<=perend;i++) tot+=sx[i];
       dxbar[indx]=tot/(perend-perstart+1);
    }
    else{
@@ -38,27 +38,25 @@ __global__   void burst(float *dx, int n, int k, float *dxbar, int maxWinSize) {
 }
 
 __global__ void reduce(float *g_idata, float *g_odata){
-   printf("hwhew");
    extern __shared__ float sdata[];
    int tid=threadIdx.y*blockDim.x+threadIdx.x;
    unsigned int i=blockIdx.x*blockDim.x*blockDim.y+tid;
    sdata[tid]=g_idata[i];
    __syncthreads();
-
+   printf("sdata[tid],tid=%f, %d\n", sdata[tid], tid);
    for(unsigned int s=1; s<blockDim.x*blockDim.y; s*=2){
       int index=2*s*tid;
-      printf("print something");
       if(index<blockDim.x*blockDim.y){
-         if(g_idata[tid]<g_idata[index+s]){
-            g_idata[tid]=g_idata[index+s];
+         if(sdata[index]<sdata[index+s]){
+            sdata[index]=sdata[index+s];
          }
       }
       __syncthreads();
 
    }
 
-   if(tid==0) g_odata[blockIdx.x]=g_idata[0];
-   printf("in reduce, %f,\n", g_odata[blockIdx.x]);
+   if(tid==0) {g_odata[blockIdx.x]=sdata[0];
+   printf("in reduce, %f,\n", g_odata[blockIdx.x]);}
 }
 
 // things need to fix probably: bigmax allocate one int; passing n and k and bigmax to cuda function
@@ -96,7 +94,7 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
        maxWinSize=2*k;
     }
 
-    burst<<<dimGrid,dimBlock>>>(dx,n,k,dxbar, maxWinSize);
+    burst<<<dimGrid,dimBlock, n>>>(dx,n,k,dxbar, maxWinSize);
     cudaThreadSynchronize();
     cudaMemcpy(xbar, dxbar, sizeof(float)*(n-k+1)*(n-k+1), cudaMemcpyDeviceToHost);
     int tmp=0;
@@ -105,12 +103,12 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
     }
     cudaMemcpy(dxbar,xbar,sizeof(float)*(n-k+1)*(n-k+1) ,cudaMemcpyHostToDevice);
     //SomeReduce function
-    reduce<<<dimGrid, dimBlock>>>(dxbar, dout);
+    reduce<<<dimGrid, dimBlock, (n-k+1)*(n-k+1)>>>(dxbar, dout);
     // copy row vector from device to host
-    cudaMemcpy(xbar, dxbar, sizeof(float)*(n-k+1)*(n-k+1), cudaMemcpyDeviceToHost);
-    cudaMemcpy(bigmax,dbigmax, sizeof(float),cudaMemcpyDeviceToHost);
-    cudaMemcpy(out, dout, sizeof(float)*nblk, cudaMemcpyDeviceToHost);
-    printf("bigmax is%f\n", xbar[0]);
+    //cudaMemcpy(xbar, dxbar, sizeof(float)*(n-k+1)*(n-k+1), cudaMemcpyDeviceToHost);
+    //cudaMemcpy(bigmax,dbigmax, sizeof(float),cudaMemcpyDeviceToHost);
+    //cudaMemcpy(out, dout, sizeof(float)*nblk, cudaMemcpyDeviceToHost);
+    //printf("bigmax is%f\n", xbar[0]);
     cudaFree(dxbar);
     cudaFree(dout);
     cudaFree (dbigmax);
