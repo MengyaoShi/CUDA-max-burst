@@ -10,7 +10,7 @@ __global__   void SmallWindowBurst(float *dx, int n, int k, float *dxbar){
    float dCandMean=0.0;
    float dPreCandMean=0.0;
    int startm1=0;
-   if(winsize>n){
+   if(winsize>n || me>=(n-k+1)){
       return;
    }
    //dxbar is of dimension, n-k+1
@@ -32,7 +32,7 @@ __global__   void SmallWindowBurst(float *dx, int n, int k, float *dxbar){
    }
    //now find rest of means, rolling window
    dxbar[me]=dCandMean;
-   for(; startm1<(n-winsize); startm1++){
+   for(; startm1+winsize<n; startm1++){
       dPreCandMean=dCandMean;
       dCandMean=dPreCandMean+((dx[winsize+startm1]-dx[startm1])/winsize);
       if(dCandMean>dxbar[me]){
@@ -40,7 +40,7 @@ __global__   void SmallWindowBurst(float *dx, int n, int k, float *dxbar){
       }
    }
    
-   printf("dxbar[winzie], winsize=%f, %d\n", dxbar[me], winsize);
+   //printf("dxbar[winzie], winsize=%f, %d\n", dxbar[me], winsize);
 }
 
 
@@ -80,15 +80,18 @@ __global__   void burst(float *dx, int n, int k, float *dxbar, int maxWinSize) {
    __syncthreads();
    //printf("mean,indx=%f, %d\n", dxbar[indx], indx);
 }
-__global__ void reduce(float *g_idata, float *g_odata){
+__global__ void reduce(float *g_idata, float *g_odata, int n, int k, int upperlimit){
    extern __shared__ float sdata[];
    int tid=threadIdx.y*blockDim.x+threadIdx.x;
    unsigned int i=blockIdx.x*blockDim.x*blockDim.y+tid;
  //  sdata[tid]=g_idata[i];
    //__syncthreads();
    //printf("sdata[tid],tid=%f, %d\n", sdata[tid], tid);
-   for(unsigned int  s=blockDim.x*blockDim.y/2; s>0;s>>=1){
-      if(tid<blockDim.x*blockDim.y){
+   for(unsigned int  s=1; s<blockDim.x*blockDim.y;s*=2){
+      if(tid%(2*s)==0){
+         if(i+s>=upperlimit){
+            continue;
+         }
          if(g_idata[i+s]>g_idata[i]){
             g_idata[i]=g_idata[i+s];
          }
@@ -97,7 +100,7 @@ __global__ void reduce(float *g_idata, float *g_odata){
    }
 
    if(tid==0) {g_odata[blockIdx.x]=g_idata[i];
-   printf("in reduce, blockIdx.x, ans,%d %f,\n", blockIdx.x, g_odata[blockIdx.x]);
+   //printf("in reduce, blockIdx.x, ans,%d %f,\n", blockIdx.x, g_odata[blockIdx.x]);
    }
 }
 // things need to fix probably: bigmax allocate one int; passing n and k and bigmax to cuda function
@@ -111,6 +114,7 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
     float* dxbar;
     int nblk=(n-k+1)*(n-k+1)/256+1;//Number of blocks
     int maxWinSize=n;
+    int upperlimit=0;
     // copy host matrix to device matrix
 
     out=(float *) malloc(sizeof(float)*nblk);
@@ -135,12 +139,14 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
        xbar=(float *) malloc(sizeof(float)*(n-k+1)*(n-k+1));
        cudaMalloc ((void **)&dxbar, sizeof(float)*(n-k+1)*(n-k+1));
        cudaMemcpy(dxbar,xbar,sizeof(float)*(n-k+1)*(n-k+1) ,cudaMemcpyHostToDevice);
+       upperlimit=(n-k+1)*(n-k+1);
        burst<<<dimGrid,dimBlock>>>(dx,n,k,dxbar, maxWinSize);
     }
     else{
        xbar=(float *) malloc(sizeof(float)*(n-k+1));
        cudaMalloc ((void **)&dxbar, sizeof(float)*(n-k+1));
        cudaMemcpy(dxbar,xbar,sizeof(float)*(n-k+1) ,cudaMemcpyHostToDevice);
+       upperlimit=n-k+1;
        SmallWindowBurst<<<dimGrid, dimBlock>>>(dx, n, k, dxbar);
     }
     //If the wind size is smaller than n/2, we are goint to use first approach. n-k+1, in second senario, we have (n-k+1) **2
@@ -148,12 +154,12 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
     
     cudaThreadSynchronize();
     //SomeReduce function
-    reduce<<<dimGrid, dimBlock>>>(dxbar, dout);
+    reduce<<<dimGrid, dimBlock>>>(dxbar, dout, n, k, upperlimit);
     cudaThreadSynchronize();
     cudaMemcpy(out, dout, sizeof(float)*nblk, cudaMemcpyDeviceToHost);
 
     for (int i=0; i<nblk; i++){
-       printf("%f\n,",out[i]);
+       //printf("%f\n,",out[i]);
        if (out[i]>bigmax[0]){
           bigmax[0]=out[i];
        }
@@ -166,10 +172,12 @@ void maxburst(float *x, int n, int k, int *startend, float *bigmax){
 }
 int main(int arc, char **argv){
   float *x;
-  int n=10000;
-  int k=10000;
+  int n=100000;
+  
   int *startend;
   float *bigmax;
+  for(;n<100010; n++){
+     for(int k=3;k<=12;k++){
   bigmax=(float*) malloc(sizeof(float));
   startend=(int*) malloc(sizeof(int)*2);
   x=(float*) malloc(sizeof(float)*n);
@@ -179,4 +187,6 @@ int main(int arc, char **argv){
   }
   bigmax[0]=0;
   maxburst(x, n, k, startend, bigmax);
+  }
+  }
 } 
